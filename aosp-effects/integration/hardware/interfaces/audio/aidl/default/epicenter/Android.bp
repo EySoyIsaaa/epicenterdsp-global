@@ -1,0 +1,14 @@
+cc_library_shared {
+    name: "libepicenter_effect",
+    defaults: ["aidlaudioeffectservice_defaults"],
+    srcs: [
+        "EpicenterEffect.cpp",
+        "engines/EpicenterDSPCore.cpp",
+        ":effectCommonFile",
+    ],
+    local_include_dirs: ["engines"],
+    shared_libs: ["libbase"],
+    cflags: ["-Wall", "-Wextra", "-Werror", "-DEPI_CENTER_AOSP_EFFECT=1"],
+    relative_install_path: "soundfx",
+    visibility: ["//hardware/interfaces/audio/aidl/default:__subpackages__"],
+}

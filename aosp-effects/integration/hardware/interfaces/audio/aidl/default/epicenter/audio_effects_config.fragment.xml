@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<audio_effects_conf version="2.0" xmlns="http://schemas.android.com/audio/audio_effects_conf/v2_0">
+    <libraries>
+        <library name="epicenter" path="libepicenter_effect.so"/>
+    </libraries>
+    <effects>
+        <effect name="bassboost" library="epicenter"
+                uuid="d05a47cc-8be1-4a58-9fb5-1392937d6bca"/>
+    </effects>
+    <postprocess>
+        <stream type="music">
+            <apply effect="bassboost"/>
+        </stream>
+    </postprocess>
+</audio_effects_conf>
