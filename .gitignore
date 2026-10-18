@@ -1,0 +1,19 @@
+# Android/Gradle generated output and machine-local setup
+**/.gradle/
+**/.idea/
+**/build/
+**/.cxx/
+**/local.properties
+**/*.iml
+**/captures/
+**/google-services.json
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+
+# Machine-specific AOSP diagnostic retained locally, never published
+/aosp-effects/DIAGNOSTICO_WINDOWS.md
