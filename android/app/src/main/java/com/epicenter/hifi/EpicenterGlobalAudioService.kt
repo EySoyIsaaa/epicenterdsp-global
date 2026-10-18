@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioFocusRequest
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.AudioTrack
@@ -36,7 +38,8 @@ data class GlobalAudioState(
     val peak: Float = 0f,
     val captureToOutputMs: Float? = null,
     val latencyJitterMs: Float? = null,
-    val outputRoute: String = ""
+    val outputRoute: String = "",
+    val audioFocusGranted: Boolean? = null
 )
 
 class EpicenterGlobalAudioService : Service() {
@@ -48,6 +51,11 @@ class EpicenterGlobalAudioService : Service() {
     private var projectionCallback: MediaProjection.Callback? = null
     private var recorder: AudioRecord? = null
     private var output: AudioTrack? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+    @Volatile private var audioFocusGranted: Boolean? = null
+    private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        Log.i(TAG, "Audio focus changed: $change")
+    }
     private var dsp: EpicenterDSPNative? = null
     private var headphonesMode = true
     private var intensity = 65f
@@ -56,6 +64,7 @@ class EpicenterGlobalAudioService : Service() {
     private var balance = 100f
     private var volume = 100f
     @Volatile private var bassOnlyOutputEnabled = false
+    @Volatile private var duckingEnabled = true
     private var bassCutoffHz = 80f
     private var bassGainPercent = 70f
     private var bassPolarityInverted = false
@@ -112,6 +121,14 @@ class EpicenterGlobalAudioService : Service() {
     fun currentWidth(): Float = prefs.getFloat("engine.width", 50f)
     fun currentBalance(): Float = prefs.getFloat("engine.balance", 100f)
     fun currentVolume(): Float = prefs.getFloat("engine.volume", 100f)
+    fun isDuckingEnabled(): Boolean = prefs.getBoolean(KEY_DUCKING_ENABLED, true)
+
+    fun setDuckingEnabled(enabled: Boolean) {
+        duckingEnabled = enabled
+        prefs.edit().putBoolean(KEY_DUCKING_ENABLED, enabled).apply()
+        if (!running.get()) return
+        if (enabled) requestDuckingFocus() else abandonDuckingFocus()
+    }
 
     fun setBassOnlyEnabled(enabled: Boolean) {
         bassOnlyOutputEnabled = enabled
@@ -286,6 +303,8 @@ class EpicenterGlobalAudioService : Service() {
             outputBuilder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
         }
         val newOutput = outputBuilder.build()
+        duckingEnabled = prefs.getBoolean(KEY_DUCKING_ENABLED, true)
+        if (duckingEnabled) requestDuckingFocus()
         val newDsp = EpicenterDSPNative(sampleRate, 2)
         headphonesMode = prefs.getBoolean("engine.headphones", true)
         intensity = prefs.getFloat("engine.intensity", 65f)
@@ -307,7 +326,12 @@ class EpicenterGlobalAudioService : Service() {
         newRecorder.startRecording()
         newOutput.play()
         running.set(true)
-        _state.value = GlobalAudioState(GlobalAudioStatus.SILENCE, "Captura autorizada; esperando audio compatible…", sampleRate)
+        _state.value = GlobalAudioState(
+            GlobalAudioStatus.SILENCE,
+            "Captura autorizada; esperando audio compatible…",
+            sampleRate,
+            audioFocusGranted = audioFocusGranted
+        )
         worker = thread(name = "EpicenterGlobalAudio", priority = Thread.MAX_PRIORITY) {
             // 256 stereo frames (5.33 ms at 48 kHz) reduce fixed block latency.
             // Blocking writes keep the queue bounded to this chunk plus AudioTrack's HAL buffer.
@@ -374,7 +398,8 @@ class EpicenterGlobalAudioService : Service() {
                             smoothedPeak,
                             smoothedLatencyMs,
                             smoothedLatencyJitterMs,
-                            route
+                            route,
+                            audioFocusGranted
                         )
                         lastUiUpdateMs = now
                     }
@@ -409,10 +434,60 @@ class EpicenterGlobalAudioService : Service() {
         try { output?.pause(); output?.flush(); output?.stop() } catch (_: Throwable) { }
         try { recorder?.release() } catch (_: Throwable) { }
         try { output?.release() } catch (_: Throwable) { }
+        abandonDuckingFocus()
         try { dsp?.setEnabled(false); dsp?.release() } catch (_: Throwable) { }
         try { projection?.let { p -> projectionCallback?.let(p::unregisterCallback); p.stop() } } catch (_: Throwable) { }
         recorder = null; output = null; dsp = null; projection = null
         projectionCallback = null
+    }
+
+    /** Requests Android's cooperative MAY_DUCK behavior while the parallel bass stem runs. */
+    private fun requestDuckingFocus() {
+        try {
+            val manager = getSystemService(AUDIO_SERVICE) as AudioManager
+            val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setOnAudioFocusChangeListener(audioFocusListener)
+                    .build()
+                audioFocusRequest = request
+                manager.requestAudioFocus(request)
+            } else {
+                @Suppress("DEPRECATION")
+                manager.requestAudioFocus(
+                    audioFocusListener,
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                )
+            }
+            audioFocusGranted = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            Log.i(TAG, "MAY_DUCK audio focus ${if (audioFocusGranted == true) "granted" else "not granted"}; original player controls its response")
+        } catch (t: Throwable) {
+            audioFocusGranted = false
+            Log.w(TAG, "MAY_DUCK focus request failed; continuing without ducking", t)
+        }
+    }
+
+    private fun abandonDuckingFocus() {
+        try {
+            val manager = getSystemService(AUDIO_SERVICE) as AudioManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let(manager::abandonAudioFocusRequest)
+                audioFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                manager.abandonAudioFocus(audioFocusListener)
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Unable to abandon ducking focus cleanly", t)
+        } finally {
+            audioFocusGranted = null
+        }
     }
 
     private fun createNotificationChannel() {
@@ -439,6 +514,7 @@ class EpicenterGlobalAudioService : Service() {
         private const val CHANNEL_ID = "epicenter_global_capture"
         private const val NOTIFICATION_ID = 77
         private const val KEY_BASS_ONLY_ENABLED = "bass.only.enabled"
+        private const val KEY_DUCKING_ENABLED = "audio.ducking.enabled"
         private const val KEY_BASS_CUTOFF = "bass.only.cutoff"
         private const val KEY_BASS_GAIN = "bass.only.gain"
         private const val KEY_BASS_POLARITY = "bass.only.polarity"

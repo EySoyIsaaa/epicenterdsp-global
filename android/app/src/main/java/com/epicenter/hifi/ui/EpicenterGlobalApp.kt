@@ -23,6 +23,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -87,7 +88,7 @@ fun EpicenterGlobalApp(
                     GlobalTab.HOME -> HomeContent(state, service, intensity, { intensity = it }, onStartCapture, onStopCapture)
                     GlobalTab.EFFECTS -> EffectsContent(service, intensity, { intensity = it })
                     GlobalTab.COMPAT -> CompatibilityContent(state)
-                    GlobalTab.SETTINGS -> SettingsContent()
+                    GlobalTab.SETTINGS -> SettingsContent(service, state)
                 }
             }
             NavigationBar(containerColor = Color(0xFF111113)) {
@@ -117,6 +118,7 @@ private fun HomeContent(state: GlobalAudioState, service: EpicenterGlobalAudioSe
     var bassGain by remember(service) { mutableStateOf(service?.currentBassGainPercent() ?: 70f) }
     var phaseDelay by remember(service) { mutableStateOf(service?.currentBassPhaseDelay() ?: 0f) }
     var inverted by remember(service) { mutableStateOf(service?.isBassPolarityInverted() ?: false) }
+    val starting = state.status == GlobalAudioStatus.REQUESTING
     val active = state.status == GlobalAudioStatus.CAPTURING || state.status == GlobalAudioStatus.SILENCE
     val statusColor = when (state.status) {
         GlobalAudioStatus.CAPTURING -> Color(0xFF64D995)
@@ -129,18 +131,45 @@ private fun HomeContent(state: GlobalAudioState, service: EpicenterGlobalAudioSe
         Spacer(Modifier.height(22.dp))
         Button(
             onClick = { if (active) stop() else start() },
+            enabled = !starting,
             modifier = Modifier.size(190.dp),
             shape = CircleShape,
-            colors = ButtonDefaults.buttonColors(containerColor = if (active) AccentRed else Color(0xFF202023), contentColor = Color.White)
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (active) AccentRed else Color(0xFF202023),
+                contentColor = Color.White,
+                disabledContainerColor = Color(0xFF202023),
+                disabledContentColor = Color.White
+            )
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                BoxPulse(active)
+                if (starting) CircularProgressIndicator(color = AccentRed, strokeWidth = 3.dp, modifier = Modifier.size(44.dp))
+                else BoxPulse(active)
                 Spacer(Modifier.height(12.dp))
-                Text(if (active) "DETENER" else "INICIAR", fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                Text(
+                    when {
+                        starting -> "PREPARANDO"
+                        active -> "DETENER"
+                        else -> "INICIAR"
+                    },
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.5.sp
+                )
             }
         }
         Spacer(Modifier.height(18.dp))
         Text(state.message, color = statusColor, fontSize = 13.sp, textAlign = TextAlign.Center)
+        if (active && state.audioFocusGranted != null) {
+            Text(
+                if (state.audioFocusGranted == true)
+                    "Atenuación solicitada · el reproductor decide si reduce el volumen"
+                else
+                    "Android no concedió la atenuación · el audio original puede seguir igual",
+                color = Color(0xFF9999A0),
+                fontSize = 10.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+            )
+        }
         if (state.sampleRate > 0) Text("${state.sampleRate / 1000} kHz · pico ${(state.peak * 100).toInt()}%", color = Color(0xFF88888F), fontSize = 11.sp)
         if (active && state.sampleRate > 0) {
             val timing = state.captureToOutputMs?.let { "${"%.1f".format(it)} ms · variación ${"%.1f".format(state.latencyJitterMs ?: 0f)} ms" }
@@ -153,8 +182,8 @@ private fun HomeContent(state: GlobalAudioState, service: EpicenterGlobalAudioSe
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                        Text("BASS-ONLY PARALLEL", fontWeight = FontWeight.SemiBold)
-                        Text(if (bassOnlyEnabled) "Solo bajo generado activo" else "Bajo adicional apagado", color = Color(0xFF9999A0), fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp))
+                        Text("BAJO ADICIONAL · EXPERIMENTAL", fontWeight = FontWeight.SemiBold)
+                        Text(if (bassOnlyEnabled) "Señal de graves generada activa" else "Bajo adicional apagado", color = Color(0xFF9999A0), fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp))
                     }
                     Switch(
                         checked = bassOnlyEnabled,
@@ -162,7 +191,7 @@ private fun HomeContent(state: GlobalAudioState, service: EpicenterGlobalAudioSe
                         colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = AccentRed, checkedThumbColor = Color.White)
                     )
                 }
-                Text("La app fuente sigue normal. Epicenter reproduce únicamente la señal wet generada; voces e instrumentos no se vuelven a emitir. Android no garantiza sincronía de fase.", color = Color(0xFF9999A0), fontSize = 11.sp, lineHeight = 15.sp)
+                Text("Epicenter reproduce únicamente la señal wet generada. Se solicita a Android atenuar la app fuente con audio focus; el reproductor puede ignorarlo y el nivel de atenuación no lo controla esta app. Android tampoco garantiza sincronía de fase.", color = Color(0xFF9999A0), fontSize = 11.sp, lineHeight = 15.sp)
                 Spacer(Modifier.height(10.dp))
                 Text("PASA-BAJAS · ${cutoff.toInt()} Hz", color = Color.White, fontSize = 12.sp)
                 Slider(value = cutoff, onValueChange = { cutoff = it; service?.setBassCutoff(it) }, valueRange = 50f..100f)
@@ -215,7 +244,7 @@ private fun EngineSelection(service: EpicenterGlobalAudioService?) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(if (headphones) "Audífonos / altavoces" else "Car Audio / subwoofer", fontWeight = FontWeight.SemiBold)
+                    Text(if (headphones) "Audífonos / altavoces" else "Audio de automóvil / subwoofer", fontWeight = FontWeight.SemiBold)
                     Text(if (headphones) "Motor de graves para drivers pequeños" else "Motor clásico de restauración de subgraves", color = Color(0xFF9999A0), fontSize = 11.sp)
                 }
                 Switch(
@@ -243,12 +272,12 @@ private fun EffectsContent(service: EpicenterGlobalAudioService?, intensity: Flo
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
                 if (!headphones) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                        GlobalKnob("Sweep", sweep, 27f, 63f, "Hz", 120.dp) { sweep = it; service?.setSweepFrequency(it) }
-                        GlobalKnob("Width", width, 0f, 100f, "%", 120.dp) { width = it; service?.setWidth(it) }
+                        GlobalKnob("Barrido", sweep, 27f, 63f, "Hz", 120.dp) { sweep = it; service?.setSweepFrequency(it) }
+                        GlobalKnob("Anchura", width, 0f, 100f, "%", 120.dp) { width = it; service?.setWidth(it) }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                         GlobalKnob("Balance", balance, 0f, 100f, "%", 120.dp) { balance = it; service?.setBalance(it) }
-                        GlobalKnob("Volume", volume, 0f, 100f, "%", 120.dp) { volume = it; service?.setVolume(it) }
+                        GlobalKnob("Volumen", volume, 0f, 100f, "%", 120.dp) { volume = it; service?.setVolume(it) }
                     }
                 } else {
                     Text("Intensidad actual: ${intensity.toInt()}% · ajustable con la perilla principal en Inicio.", color = Color(0xFF9999A0), fontSize = 11.sp, lineHeight = 15.sp)
@@ -301,7 +330,15 @@ private fun CompatibilityContent(state: GlobalAudioState) {
             GlobalAudioStatus.ERROR, GlobalAudioStatus.LIMITED -> "Limitado"
             else -> "No verificado"
         })
-        DiagnosticRow("Foco de audio", "Solicitud opcional para atenuar fuentes compatibles", "Experimental")
+        DiagnosticRow(
+            "Atenuación de la fuente",
+            "Solicitud temporal de audio focus para atenuación cooperativa",
+            when (state.audioFocusGranted) {
+                true -> "Concedida; el reproductor decide"
+                false -> "No concedida"
+                null -> "Inactiva"
+            }
+        )
         DiagnosticRow("Ruta de salida", "La fuente puede seguir sonando junto al audio procesado", "Limitación Android")
         Spacer(Modifier.height(14.dp))
         Text("La solicitud de foco no controla todas las apps. Comprueba el nivel de señal capturada en Inicio para ver si la fuente sigue llegando al DSP.", color = Color(0xFFBEBEC4), fontSize = 12.sp, lineHeight = 18.sp)
@@ -309,14 +346,38 @@ private fun CompatibilityContent(state: GlobalAudioState) {
 }
 
 @Composable
-private fun SettingsContent() {
+private fun SettingsContent(service: EpicenterGlobalAudioService?, state: GlobalAudioState) {
+    var duckingEnabled by remember(service) { mutableStateOf(service?.isDuckingEnabled() ?: true) }
     Column {
-        PageTitle("Ajustes", "EpicenterDSP Global · prototipo técnico")
-        DiagnosticRow("Suscripción", "Google Play Billing", "Pendiente")
-        Text("La compra y restauración requieren configuración de Play Console y verificación segura de derechos en un servicio. No se habilitan cobros ni acceso premium en esta compilación.", color = Color(0xFFBEBEC4), fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 12.dp))
-        Spacer(Modifier.height(18.dp))
-        DiagnosticRow("Marca", "Logo, icono y paleta heredados de Epicenter", "Reutilizados")
-        DiagnosticRow("Procesamiento", "PCM 16-bit · estéreo · 48 kHz", "Prototipo")
+        PageTitle("Ajustes", "Preferencias de procesamiento y estado de la app.")
+        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF171719), contentColor = Color.White), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text("Atenuar audio original", fontWeight = FontWeight.SemiBold)
+                        Text("Solicitar ducking a Android mientras corre el procesamiento", color = Color(0xFF9999A0), fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 3.dp))
+                    }
+                    Switch(
+                        checked = duckingEnabled,
+                        onCheckedChange = { duckingEnabled = it; service?.setDuckingEnabled(it) },
+                        colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = AccentRed, checkedThumbColor = Color.White)
+                    )
+                }
+                Text("El reproductor puede ignorar la solicitud. Android no permite fijar desde esta app cuántos decibeles debe bajar.", color = Color(0xFF9999A0), fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 8.dp))
+                if (state.audioFocusGranted != null) {
+                    Text(
+                        if (state.audioFocusGranted == true) "Estado actual: solicitud concedida por Android" else "Estado actual: solicitud no concedida",
+                        color = if (state.audioFocusGranted == true) Color(0xFF64D995) else Color(0xFFFF7780),
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        DiagnosticRow("Procesamiento", "48 kHz · PCM estéreo · salida en paralelo", "Experimental")
+        DiagnosticRow("Motores", "EpicenterDSPCore y HeadphonesBassCore", "Integrados")
+        DiagnosticRow("Privacidad", "La captura requiere consentimiento de Android y puede excluir apps protegidas.", "Control del sistema")
     }
 }
 

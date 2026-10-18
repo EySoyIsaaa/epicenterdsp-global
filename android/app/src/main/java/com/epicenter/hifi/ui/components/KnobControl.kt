@@ -23,6 +23,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -64,6 +69,17 @@ fun KnobControl(
         Box(
             modifier = Modifier
                 .size(size)
+                .semantics {
+                    contentDescription = "$label, ${value.toInt()}$unit"
+                    progressBarRangeInfo = ProgressBarRangeInfo(value, minValue..maxValue)
+                    setProgress { requestedValue ->
+                        if (enabled) {
+                            latestOnValueChange.value(requestedValue.coerceIn(minValue, maxValue))
+                            latestOnValueChangeFinished.value?.invoke()
+                            true
+                        } else false
+                    }
+                }
                 .pointerInput(enabled, minValue, maxValue, knobSizePx) {
                     if (!enabled) return@pointerInput
                     var dragValue = latestValue.value
